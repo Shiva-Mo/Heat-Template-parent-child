@@ -1,0 +1,449 @@
+heat_template_version: 2015-10-15
+description: Launch a basic instance with ubuntu-trusty image that creates the network, subnet , router and load balancer automatically
+
+parameters:
+
+  public_network:
+    type: string
+    description: Public network.
+    default: public00
+
+resources:
+
+  private_network:
+    type: OS::Neutron::Net
+    properties:
+      name: private-network
+
+  private_subnet1:
+    type: OS::Neutron::Subnet
+    properties:
+      name: private-subnet
+      network: { get_resource: private_network }
+      cidr: 10.4.4.0/24
+      gateway_ip: 10.4.4.1
+      dns_nameservers: [ "8.8.8.8", "8.8.4.4" ]
+      allocation_pools:
+        - start: 10.4.4.2
+          end: 10.4.4.254
+
+  router1:
+    type: OS::Neutron::Router
+    properties:
+      name: router
+      external_gateway_info:
+        network: { get_param: public_network }
+
+  router_interface1:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router1 }
+      subnet: { get_resource: private_subnet1 }
+
+##################### Create the floting IP for the web server and the file server ##################
+
+  floating_ip_webserver:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: public_network }
+
+  floating_ip_association_webserver:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: floating_ip_webserver }
+      port_id: { get_attr: [ loadbalancer_webserver, vip_port_id ] }
+
+  floating_ip_fileserver:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: public_network }
+      
+  floating_ip_association_fileserver:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: floating_ip_fileserver }
+      port_id: { get_attr: [ loadbalancer_fileserver, vip_port_id ] }
+
+########################### Create the floting IP for the application server ########################
+
+  floating_ip_appserver:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: public_network }
+
+  floating_ip_association_appserver:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: floating_ip_appserver}
+      port_id: { get_attr: [ loadbalancer_appserver, vip_port_id ] }
+
+############################# Create the floting IP for the database server #########################
+
+  floating_ip_DBserver:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: public_network }
+  
+  floating_ip_association_DBserver:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: floating_ip_DBserver}
+      port_id: { get_attr: [ loadbalancer_DBserver, vip_port_id ] }
+
+################### Create the security group for the webserver and the file server #################
+
+  web_server_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: web-server-SG
+      rules:
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+          port_range_min: 80
+          port_range_max: 80
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+          port_range_min: 443
+          port_range_max: 443
+        - protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+        - protocol: icmp
+
+####################### Create the security group for the application server ########################
+
+  app_server_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: app-server-SG
+      rules:
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+          port_range_min: 8080
+          port_range_max: 8080
+        - protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+        - protocol: icmp
+
+####################### Create the security group for the Database server  ##########################
+
+  DB_server_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: DB-server-SG
+      rules:
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+          port_range_min: 3306
+          port_range_max: 3306
+        - protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+        - protocol: icmp
+      
+################################# Create the web server cluster #####################################
+
+  webserver_cluster:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: 2
+      resource_def:
+        type: child-webserver.yaml
+        properties:
+          name: web-server-%index%
+          image: ubuntu-trusty-14.04_0.0.1
+          flavor: cb1.medium
+          key_name: mykey
+          network: { get_resource: private_network }
+          subnet: { get_resource: private_subnet1 }
+          security_group: { get_resource: web_server_security_group }
+          pool: { get_resource: pool_webserver } 
+          port: 80
+
+################################### Create the file server cluster ##################################
+
+  fileserver_cluster:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: 2
+      resource_def:
+        type: child-fileserver.yaml
+        properties:
+          name: file-server-%index%
+          image: ubuntu-trusty-14.04_0.0.1
+          flavor: cb1.medium
+          key_name: mykey
+          network: { get_resource: private_network }
+          subnet: { get_resource: private_subnet1 }
+          security_group: { get_resource: web_server_security_group }
+          pool: { get_resource: pool_fileserver }
+          port: 80
+
+################################# Create the application server cluster #############################
+      
+  appserver_cluster:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: 2
+      resource_def:
+        type: child-appserver.yaml
+        properties:
+          name: app-server-%index%
+          image: ubuntu-trusty-14.04_0.0.1
+          flavor: cb1.medium
+          key_name: mykey
+          network: { get_resource: private_network }
+          subnet: { get_resource: private_subnet1 }
+          security_group: { get_resource: app_server_security_group }
+          pool: { get_resource: pool_appserver } 
+          port: 8080 
+
+################################# Create the database server cluster ################################
+
+  DBserver_cluster:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: 2
+      resource_def:
+        type: child-dbserver.yaml
+        properties:
+          name: DB-server-%index%
+          image: ubuntu-trusty-14.04_0.0.1
+          flavor: cb1.medium
+          key_name: mykey
+          network: { get_resource: private_network }
+          subnet: { get_resource: private_subnet1 }
+          security_group: { get_resource: DB_server_security_group }
+          pool: { get_resource: pool_DBserver }
+          port: 3306
+
+################################# Create the load balancer webserver ################################
+ 
+  loadbalancer_webserver:
+    type: OS::Neutron::LBaaS::LoadBalancer
+    properties:
+      vip_subnet: { get_resource: private_subnet1 } 
+
+  listener_webserver:
+    type: OS::Neutron::LBaaS::Listener
+    properties:
+      loadbalancer: { get_resource: loadbalancer_webserver }
+      protocol: HTTP
+      protocol_port: 80
+
+  pool_webserver:
+    type: OS::Neutron::LBaaS::Pool
+    properties:
+      lb_algorithm: ROUND_ROBIN
+      protocol: HTTP
+      listener: { get_resource: listener_webserver }
+
+  monitor_webserver:
+    type: OS::Neutron::LBaaS::HealthMonitor
+    properties:
+      delay: 3
+      type: HTTP
+      timeout: 3
+      max_retries: 3
+      pool: { get_resource: pool_webserver }
+
+################################ Create the load balancer fileserver ################################
+ 
+  loadbalancer_fileserver:
+    type: OS::Neutron::LBaaS::LoadBalancer
+    properties:
+      vip_subnet: { get_resource: private_subnet1 }
+
+  listener_fileserver:
+    type: OS::Neutron::LBaaS::Listener
+    properties:
+      loadbalancer: { get_resource: loadbalancer_fileserver }
+      protocol: HTTP
+      protocol_port: 80
+
+  pool_fileserver:
+    type: OS::Neutron::LBaaS::Pool
+    properties:
+      lb_algorithm: ROUND_ROBIN
+      protocol: HTTP
+      listener: { get_resource: listener_fileserver }
+
+  monitor_fileserver:
+    type: OS::Neutron::LBaaS::HealthMonitor
+    properties:
+      delay: 3
+      type: HTTP
+      timeout: 3
+      max_retries: 3
+      pool: { get_resource: pool_fileserver }
+
+############################# Create the load balancer application server #############################
+
+  loadbalancer_appserver:
+    type: OS::Neutron::LBaaS::LoadBalancer
+    properties:
+      vip_subnet: { get_resource: private_subnet1 } 
+
+  listener_appserver:
+    type: OS::Neutron::LBaaS::Listener
+    properties:
+      loadbalancer: { get_resource: loadbalancer_appserver }
+      protocol: HTTP
+      protocol_port: 8080
+
+  pool_appserver:
+    type: OS::Neutron::LBaaS::Pool
+    properties:
+      lb_algorithm: ROUND_ROBIN
+      protocol: HTTP
+      listener: { get_resource: listener_appserver }
+
+  monitor_appserver:
+    type: OS::Neutron::LBaaS::HealthMonitor
+    properties:
+      delay: 3
+      type: HTTP
+      timeout: 3
+      max_retries: 3
+      pool: { get_resource: pool_appserver }
+ 
+############################### Create the load balancer Database server ##############################
+ 
+  loadbalancer_DBserver:
+    type: OS::Neutron::LBaaS::LoadBalancer
+    properties:
+      vip_subnet: { get_resource: private_subnet1 }
+
+  listener_DBserver:
+    type: OS::Neutron::LBaaS::Listener
+    properties:
+      loadbalancer: { get_resource: loadbalancer_DBserver }
+      protocol: HTTP
+      protocol_port: 3306
+
+  pool_DBserver:
+    type: OS::Neutron::LBaaS::Pool
+    properties:
+      lb_algorithm: ROUND_ROBIN
+      protocol: HTTP
+      listener: { get_resource: listener_DBserver }
+
+  monitor_DBserver:
+    type: OS::Neutron::LBaaS::HealthMonitor
+    properties:
+      delay: 3
+      type: HTTP
+      timeout: 3
+      max_retries: 3
+      pool: { get_resource: pool_DBserver }
+
+outputs:
+
+######################## IP address of the servers
+
+  instance_ip_webserver:
+    description: IP address of the instance_webserver.
+    value: { get_attr: [ webserver_cluster, instance_ip1_webserver ] }
+
+  instance_ip_fileserver:
+    description: IP address of the instance_fileserver.
+    value: { get_attr: [ fileserver_cluster, instance_ip1_fileserver ] }
+
+  instance_ip_appserver:
+    description: IP address of the instance_appserver.
+    value: { get_attr: [ appserver_cluster, instance_ip1_appserver ] }
+  
+  instance_ip_DBserver:
+    description: IP address of the instance_DBserver.
+    value: { get_attr: [ DBserver_cluster, instance_ip1_DBserver ] }
+
+########################## Name address of the servers
+
+  instance_name_webserver:
+    description: Name of the instance_webserver.
+    value: { get_attr: [ webserver_cluster, instance_name1 ] }
+
+  instance_name_fileserver:
+    description: Name of the instance_fileserver
+    value: { get_attr: [ fileserver_cluster, instance_name1_fileserver ] }
+
+  instance_name_appserver:
+    description: Name of the instance_appserver
+    value: { get_attr: [ appserver_cluster, instance_name1_appserver ] }
+  
+  instance_name_DBserver:
+    description: Name of the instance_DBserver
+    value: { get_attr: [ DBserver_cluster, instance_name1_DBserver ] }
+
+########################## VIP address of the LoadBalancer servers
+
+  vip_address_loadbalancer_webserver:
+    description: The VIP address of the LoadBalancer_webserver.
+    value: { get_attr: [ loadbalancer_webserver, vip_address ] }
+
+  vip_address_loadbalancer_fileserver:
+    description: The VIP address of the LoadBalancer_fileserver.
+    value: { get_attr: [ loadbalancer_fileserver, vip_address ] }
+ 
+  vip_address_loadbalancer_appserver:
+    description: The VIP address of the LoadBalancer_appserver.
+    value: { get_attr: [ loadbalancer_appserver, vip_address ] }
+ 
+  vip_address_loadbalancer_DBserver:
+    description: The VIP address of the LoadBalancer_DBserver.
+    value: { get_attr: [ loadbalancer_DBserver, vip_address ] }
+
+########################## VIP port of the LoadBalancer servers
+
+  vip_port_id_fileserver:
+    description: The VIP port of the LoadBalancer_fileserver.
+    value: { get_attr: [ loadbalancer_fileserver, vip_port_id ] }
+ 
+  vip_port_id_webserver:
+    description: The VIP port of the LoadBalancer_webserver.
+    value: { get_attr: [ loadbalancer_webserver, vip_port_id ] }
+ 
+  vip_port_id_appserver:
+    description: The VIP port of the LoadBalancer_appserver.
+    value: { get_attr: [ loadbalancer_appserver, vip_port_id ] }
+  
+  vip_port_id_DBserver:
+    description: The VIP port of the LoadBalancer_DBserver.
+    value: { get_attr: [ loadbalancer_DBserver, vip_port_id ] }
+  
+########################## Members associated with the pool servers
+
+  pool_webserver:
+    description: Members associated with this pool_webserver.
+    value: { get_attr: [ pool_webserver, members ] }
+  
+  pool_fileserver:
+    description: Members associated with this pool_fileserver.
+    value: { get_attr: [ pool_fileserver, members ] }
+   
+  pool_appserver:
+    description: Members associated with this pool_appserver.
+    value: { get_attr: [ pool_appserver, members ] }
+  
+  pool_DBserver:
+    description: Members associated with this pool_DBserver.
+    value: { get_attr: [ pool_DBserver, members ] }
+
+######################### Allocated floating IP address 
+
+  floating_ip_webserver:
+    description: Allocated floating IP address_webserver.
+    value: { get_attr: [floating_ip_webserver, floating_ip_address ] }
+
+  floating_ip_fileserver:
+    description: Allocated floating IP address_fileserver.
+    value: { get_attr: [floating_ip_fileserver, floating_ip_address ] }
+    
+  floating_ip_appserver:
+    description: Allocated floating IP address_appserver.
+    value: { get_attr: [floating_ip_appserver, floating_ip_address ] }
+
+  floating_ip_DBserver:
+    description: Allocated floating IP address_DBserver.
+    value: { get_attr: [floating_ip_DBserver, floating_ip_address ] }
