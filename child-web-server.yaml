@@ -1,0 +1,86 @@
+heat_template_version: 2015-10-15
+description: Launch a basic instance with ubuntu-trusty image and a poolmember for the webserver.
+
+parameters:
+
+  name:
+    type: string
+    description: Name of the instance
+
+  key_name:
+    type: string
+    description: SSH key to inject into the instance
+    default: mykey
+
+  image:
+    type: string
+    description: Image to deploy the instance from
+    default: ubuntu-trusty-14.04_0.0.1
+
+  flavor:
+    type: string
+    description: Flavor to use for the instance
+    default: cb1.medium
+
+  network:
+    type: string
+    description: The network to connect the instance to the private network
+
+  subnet:
+    type: string 
+    description: The subnet belonging to the private network
+
+  security_group:
+    type: string
+    description: List of security groups to attach to the instance
+
+  pool:
+    type: string
+    description: The load balancer webserver pool
+
+  port:
+    type: number
+    description: Port used by the load balancer webserver
+
+resources:
+
+  web_server:
+    type: OS::Nova::Server
+    properties:
+      name: { get_param: name }
+      key_name: { get_param: key_name }
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      security_groups: 
+        - { get_param: security_group }
+      networks:
+        - network: { get_param: network }
+      user_data: |
+        #!/bin/bash
+        apt-get update
+        apt-get install -y nginx
+        uname -n > /usr/share/nginx/html/index.html
+        #sudo apt-get install apache2 -y
+        #sudo apt-get install openjdk-7-jre-headless -y 
+########### you can configure the apache2 as your desire(e.g. listen to your desired port number)at the bellowing path 
+########### sudo vim /etc/apache2/sites-enabled/000-default.conf and sudo vim /etc/apache2/ports.conf
+########### then for applying changes use sudo service apache2 restart
+
+  member_pool_webserver:
+    type: OS::Neutron::LBaaS::PoolMember
+    properties:
+      pool: { get_param: pool }
+      address: { get_attr: [web_server, first_address] }
+      protocol_port: { get_param: port }
+      subnet: { get_param: subnet }
+
+outputs:
+
+  instance_ip1_webserver:
+    value: { get_attr: [ web_server, first_address ] }
+
+  instance_name1_webserver:
+    value: { get_attr: [ web_server, name ] }
+    
+  instance_network1_webserver:
+    value: { get_attr: [ web_server, networks ] }
