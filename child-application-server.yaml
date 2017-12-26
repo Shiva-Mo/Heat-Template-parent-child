@@ -1,0 +1,90 @@
+heat_template_version: 2015-10-15
+description: >
+  Launch a basic instance with ubuntu-trusty image and a poolmember for the application server
+parameters:
+
+  name:
+    type: string
+    description: Name of the instance
+
+  key_name:
+    type: string
+    description: SSH key to inject into the instance
+    default: mykey
+    
+  image:
+    type: string
+    description: Image to deploy the instance from
+    default: ubuntu-trusty-14.04_0.0.1
+
+  flavor:
+    type: string
+    description: Flavor to use for the instance
+    default: cb1.medium
+
+  network:
+    type: string
+    description: The network to connect the instance to the private network
+
+  subnet:
+    type: string 
+    description: The subnet belonging to the private network
+
+  security_group:
+    type: string
+    description: List of security groups to attach to the instance
+
+  pool:
+    type: string
+    description: The load balancer appserver pool
+
+  port:
+    type: number
+    description: Port used by the load balancer application server
+
+resources:
+
+  app_server:
+    type: OS::Nova::Server
+    properties:
+      name: { get_param: name }
+      key_name: { get_param: key_name }
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      security_groups: 
+        - { get_param: security_group }
+      networks:
+        - network: { get_param: network }
+      user_data: |
+        #!/bin/bash
+        sudo apt-get update
+        apt-get install -y nginx
+        uname -n > /usr/share/nginx/html/index.html
+######### The procedures of installation Jenkins on your application server is as following commands
+######### you should add "127.0.0.1 server-name" on the path of /etc/hosts also 
+        #sudo add-apt-repository ppa:webupd8team/java -y
+        #sudo apt-get update
+        #sudo apt-get install oracle-java8-installer -y
+        #sudo wget --no-check-certificate -q -O - http://pkg.jenkins-ci.org/debian/jenkins-ci.org.key | sudo apt-key add -
+        #sudo sh -c 'echo deb http://pkg.jenkins-ci.org/debian binary/ > /etc/apt/sources.list.d/jenkins.list'
+        #sudo apt-get update  
+        #sudo apt-get install jenkins -y
+       
+  member_pool_appserver:
+    type: OS::Neutron::LBaaS::PoolMember
+    properties:
+      pool: { get_param: pool }
+      address: { get_attr: [app_server, first_address] }
+      protocol_port: { get_param: port }
+      subnet: { get_param: subnet }
+
+outputs:
+
+  instance_ip1_appserver:
+    value: { get_attr: [ app_server, first_address ] }
+
+  instance_name1_appserver:
+    value: { get_attr: [ app_server, name ] }
+    
+  instance_network1_appserver:
+    value: { get_attr: [ app_server, networks ] }
